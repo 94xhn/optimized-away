@@ -6,7 +6,7 @@
 <title>今天我被优化了</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #0f1420; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0e18; }
   body {
     font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
     touch-action: none; user-select: none;
@@ -14,7 +14,7 @@
   #c { display: block; width: 100%; height: 100%; }
   #hint {
     position: fixed; left: 0; right: 0; bottom: 10px; text-align: center;
-    color: #5a6577; font-size: 12px; letter-spacing: .5px; pointer-events: none;
+    color: #4a5468; font-size: 12px; letter-spacing: .5px; pointer-events: none;
   }
 </style>
 </head>
@@ -46,6 +46,86 @@
   window.addEventListener("resize", resize);
   resize();
 
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function pick(arr) { return arr[(Math.random() * arr.length) | 0]; }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+  // ---------- 音效引擎(Web Audio 实时合成,零依赖)----------
+  function Audio2() { this.ctx = null; this.master = null; this.ok = true; }
+  Audio2.prototype.unlock = function () {
+    if (!this.ok) return;
+    try {
+      if (!this.ctx) {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) { this.ok = false; return; }
+        this.ctx = new AC();
+        this.master = this.ctx.createGain();
+        this.master.gain.value = 0.26;
+        this.master.connect(this.ctx.destination);
+      }
+      if (this.ctx.state === "suspended") this.ctx.resume();
+    } catch (e) { this.ok = false; }
+  };
+  // 单音:可滑音 + ADSR 衰减
+  Audio2.prototype.tone = function (freq, dur, type, vol, slideTo) {
+    if (!this.ok || !this.ctx) return;
+    var t = this.ctx.currentTime;
+    var o = this.ctx.createOscillator();
+    var g = this.ctx.createGain();
+    o.type = type || "triangle";
+    o.frequency.setValueAtTime(freq, t);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(1, slideTo), t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol || 0.3, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t + dur + 0.03);
+  };
+  // 噪声爆破(受击 / 失败)
+  Audio2.prototype.noise = function (dur, vol, cut) {
+    if (!this.ok || !this.ctx) return;
+    var t = this.ctx.currentTime;
+    var len = Math.floor(this.ctx.sampleRate * dur);
+    var buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    var d = buf.getChannelData(0);
+    for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    var src = this.ctx.createBufferSource(); src.buffer = buf;
+    var f = this.ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = cut || 1000;
+    var g = this.ctx.createGain(); g.gain.value = vol || 0.3;
+    src.connect(f); f.connect(g); g.connect(this.master);
+    src.start(t);
+  };
+  // 大调音阶,连续接好物时音高持续爬升 = 上瘾引擎
+  var SCALE = [0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 19, 21, 24];
+  Audio2.prototype.good = function (step) {
+    var semi = SCALE[Math.min(step, SCALE.length - 1)];
+    var freq = 392 * Math.pow(2, semi / 12); // 基准 G4
+    this.tone(freq, 0.14, "triangle", 0.32);
+    this.tone(freq * 2, 0.10, "sine", 0.12); // 高八度泛音点缀
+  };
+  Audio2.prototype.bad = function () {
+    this.tone(180, 0.22, "sawtooth", 0.34, 64);
+    this.noise(0.20, 0.30, 1400);
+  };
+  Audio2.prototype.start = function () {
+    var self = this;
+    [392, 523, 659].forEach(function (f, i) {
+      setTimeout(function () { self.tone(f, 0.12, "triangle", 0.28); }, i * 70);
+    });
+  };
+  Audio2.prototype.over = function () {
+    var self = this;
+    [330, 277, 220, 165].forEach(function (f, i) {
+      setTimeout(function () { self.tone(f, 0.28, "sawtooth", 0.3, f * 0.85); }, i * 130);
+    });
+    this.noise(0.5, 0.25, 800);
+  };
+  Audio2.prototype.milestone = function () {
+    this.tone(880, 0.10, "square", 0.18);
+    this.tone(1320, 0.12, "square", 0.14);
+  };
+
   // ---------- 文案库(梗)----------
   var GOOD = [
     { e: "💰", t: "工资到账" },
@@ -68,7 +148,6 @@
     { e: "🌧️", t: "优化通知" }
   ];
 
-  // 结算黑色幽默:按在职天数给不同评语
   function verdict(days) {
     if (days < 8)   return "试用期都没撑过,主打一个高效。";
     if (days < 30)  return "毕业季,恭喜你成为应届被优化生。";
@@ -78,50 +157,91 @@
     return "你居然撑过了一年?HR 表示这不科学。";
   }
 
-  function rand(a, b) { return a + Math.random() * (b - a); }
-  function pick(arr) { return arr[(Math.random() * arr.length) | 0]; }
+  var audio = new Audio2();
 
   // ---------- 游戏 ----------
   function Game() {
-    this.state = "ready";      // ready / playing / over
-    this.reset();
+    this.state = "ready";
     this.best = +(localStorage.getItem("optimized_best") || 0);
+    this.stars = [];
+    this.reset();
   }
 
+  Game.prototype.initStars = function () {
+    this.stars = [];
+    var n = Math.round((W * H) / 22000);
+    n = clamp(n, 24, 70);
+    for (var i = 0; i < n; i++) {
+      this.stars.push({
+        x: Math.random() * W, y: Math.random() * H,
+        r: rand(0.6, 2.2), v: rand(8, 28), a: rand(0.05, 0.35)
+      });
+    }
+  };
+
   Game.prototype.reset = function () {
-    this.t = 0;                // 累计游戏时间(秒)
+    this.t = 0;
     this.hp = 100;
-    this.score = 0;            // 接到的 good 计数 * 10
-    this.days = 0;             // 在职天数 = floor(存活秒数)
-    this.items = [];           // 掉落物
-    this.pops = [];            // 浮动反馈文字
+    this.score = 0;
+    this.days = 0;
+    this.items = [];
+    this.pops = [];
+    this.parts = [];     // 粒子
+    this.rings = [];     // 冲击波
+    this.shards = [];    // 被优化时的碎块
     this.spawnTimer = 0;
-    this.shake = 0;            // 受击抖动
-    // 玩家(底部托盘)
-    this.player = { x: W / 2, w: 92, h: 18, speed: 520 };
+    this.shake = 0;
+    this.flash = 0;      // 受击红闪
+    this.overFlash = 0;  // 被优化整屏闪
+    this.slowmo = 0;     // 慢动作系数(被优化瞬间)
+    this.combo = 0;
+    this.comboTimer = 0;
+    this.comboPulse = 0;
+    this.hpPulse = 0;
+    this.scorePulse = 0;
+    this.bgHue = 0;
+    this.nextMile = 15;  // 下一个里程碑天数
+    this.player = { x: W / 2, w: 92, h: 18, speed: 540, sy: 1, sx: 1 };
     this.keyL = false; this.keyR = false;
-    this.pointerX = null;      // 指针绝对横坐标,null=未按
+    this.pointerX = null;
+    if (!this.stars.length) this.initStars();
   };
 
   Game.prototype.start = function () {
     this.reset();
     this.state = "playing";
+    audio.unlock();
+    audio.start();
   };
 
   Game.prototype.gameOver = function () {
     this.state = "over";
+    this.overFlash = 1;
+    this.slowmo = 1;
+    this.shake = 26;
+    audio.over();
+    // 托盘炸成碎块
+    var p = this.player, y = H - 70;
+    for (var i = 0; i < 16; i++) {
+      this.shards.push({
+        x: p.x + rand(-p.w / 2, p.w / 2), y: y + rand(0, p.h),
+        vx: rand(-260, 260), vy: rand(-420, -120),
+        rot: rand(0, 6.28), vr: rand(-10, 10),
+        s: rand(5, 12), life: 1, color: "#7da2ff"
+      });
+    }
+    this.burst(p.x, y, "#ff5b6b", 40, 1.4);
     if (this.days > this.best) {
       this.best = this.days;
       try { localStorage.setItem("optimized_best", String(this.best)); } catch (e) {}
     }
   };
 
-  // 难度:随时间提升下落速度、生成频率、坏物比例
   Game.prototype.difficulty = function () {
-    var d = this.t / 45;                 // 0 → 1 大约 45 秒
+    var d = this.t / 45;
     return {
-      fall: 150 + d * 230,               // 像素/秒
-      interval: Math.max(0.42, 0.95 - d * 0.5),
+      fall: 150 + d * 240,
+      interval: Math.max(0.40, 0.95 - d * 0.52),
       badRatio: Math.min(0.62, 0.42 + d * 0.22)
     };
   };
@@ -132,161 +252,337 @@
     var data = isBad ? pick(BAD) : pick(GOOD);
     var r = 26;
     this.items.push({
-      x: rand(r + 8, W - r - 8),
-      y: -r,
-      r: r,
+      x: rand(r + 8, W - r - 8), y: -r, r: r,
       vy: diff.fall * rand(0.85, 1.2),
-      bad: isBad,
-      e: data.e,
-      t: data.t
+      bad: isBad, e: data.e, t: data.t,
+      spin: rand(0, 6.28), vspin: rand(-2, 2),
+      trail: []
     });
   };
 
-  Game.prototype.addPop = function (x, y, text, color) {
-    this.pops.push({ x: x, y: y, text: text, color: color, life: 1 });
+  Game.prototype.addPop = function (x, y, text, color, big) {
+    this.pops.push({ x: x, y: y, text: text, color: color, life: 1, vy: -52, scale: big ? 1.6 : 1.2 });
+  };
+
+  Game.prototype.burst = function (x, y, color, n, power) {
+    power = power || 1;
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * 6.2832;
+      var sp = rand(40, 320) * power;
+      this.parts.push({
+        x: x, y: y,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - rand(0, 80),
+        life: rand(0.4, 0.9), max: 0.9,
+        r: rand(2, 5) * power, color: color
+      });
+    }
+    if (this.parts.length > 280) this.parts.splice(0, this.parts.length - 280);
+  };
+
+  Game.prototype.ring = function (x, y, color) {
+    this.rings.push({ x: x, y: y, r: 10, max: rand(46, 64), life: 1, color: color });
+  };
+
+  // 特效层:任何状态都更新(让被优化特效播完)
+  Game.prototype.updateFx = function (dt) {
+    // 漂浮数据流
+    for (var s = 0; s < this.stars.length; s++) {
+      var st = this.stars[s];
+      st.y -= st.v * dt;
+      if (st.y < -4) { st.y = H + 4; st.x = Math.random() * W; }
+    }
+    // 粒子
+    for (var i = this.parts.length - 1; i >= 0; i--) {
+      var pt = this.parts[i];
+      pt.vy += 520 * dt;
+      pt.x += pt.vx * dt; pt.y += pt.vy * dt;
+      pt.life -= dt;
+      if (pt.life <= 0) this.parts.splice(i, 1);
+    }
+    // 冲击波
+    for (var k = this.rings.length - 1; k >= 0; k--) {
+      var rg = this.rings[k];
+      rg.r += (rg.max - rg.r) * Math.min(1, dt * 9);
+      rg.life -= dt * 2.2;
+      if (rg.life <= 0) this.rings.splice(k, 1);
+    }
+    // 碎块
+    for (var m = this.shards.length - 1; m >= 0; m--) {
+      var sh = this.shards[m];
+      sh.vy += 760 * dt;
+      sh.x += sh.vx * dt; sh.y += sh.vy * dt;
+      sh.rot += sh.vr * dt; sh.life -= dt * 0.7;
+      if (sh.life <= 0 || sh.y > H + 40) this.shards.splice(m, 1);
+    }
+    // 浮动文字
+    for (var j = this.pops.length - 1; j >= 0; j--) {
+      var pop = this.pops[j];
+      pop.y += pop.vy * dt; pop.vy *= 0.92;
+      pop.scale += (1 - pop.scale) * Math.min(1, dt * 10);
+      pop.life -= dt * 1.3;
+      if (pop.life <= 0) this.pops.splice(j, 1);
+    }
+    // 衰减
+    if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 42);
+    if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 2.6);
+    if (this.overFlash > 0) this.overFlash = Math.max(0, this.overFlash - dt * 1.4);
+    if (this.slowmo > 0) this.slowmo = Math.max(0, this.slowmo - dt * 0.8);
+    if (this.comboPulse > 0) this.comboPulse = Math.max(0, this.comboPulse - dt * 3);
+    if (this.hpPulse > 0) this.hpPulse = Math.max(0, this.hpPulse - dt * 3);
+    if (this.scorePulse > 0) this.scorePulse = Math.max(0, this.scorePulse - dt * 4);
+    this.player.sy += (1 - this.player.sy) * Math.min(1, dt * 12);
+    this.player.sx += (1 - this.player.sx) * Math.min(1, dt * 12);
+    this.bgHue += dt * 6;
   };
 
   Game.prototype.update = function (dt) {
+    this.updateFx(dt);
     if (this.state !== "playing") return;
 
     this.t += dt;
     this.days = Math.floor(this.t);
 
-    // --- 玩家移动 ---
+    // 里程碑提示
+    if (this.days >= this.nextMile) {
+      this.nextMile += 15;
+      audio.milestone();
+      this.addPop(W / 2, H * 0.32, "在职 " + this.days + " 天!", "#ffc046", true);
+      this.ring(W / 2, H * 0.32, "rgba(255,192,70,0.8)");
+    }
+
+    // combo 超时清零
+    if (this.combo > 0) {
+      this.comboTimer -= dt;
+      if (this.comboTimer <= 0) this.combo = 0;
+    }
+
+    // 玩家移动
     var p = this.player;
     if (this.pointerX != null) {
-      // 跟随指针(带平滑)
-      var target = this.pointerX;
-      p.x += (target - p.x) * Math.min(1, dt * 14);
+      p.x += (this.pointerX - p.x) * Math.min(1, dt * 16);
     } else {
       var dir = (this.keyR ? 1 : 0) - (this.keyL ? 1 : 0);
       p.x += dir * p.speed * dt;
     }
-    p.x = Math.max(p.w / 2, Math.min(W - p.w / 2, p.x));
+    p.x = clamp(p.x, p.w / 2, W - p.w / 2);
 
-    // --- 掉落物 ---
+    // 掉落物生成
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0) {
       this.spawn();
       this.spawnTimer = this.difficulty().interval;
     }
 
-    var catchY = H - 70;        // 托盘高度线
+    var catchY = H - 70;
     for (var i = this.items.length - 1; i >= 0; i--) {
       var it = this.items[i];
       it.y += it.vy * dt;
+      it.spin += it.vspin * dt;
+      // 拖尾采样
+      it.trail.push({ x: it.x, y: it.y });
+      if (it.trail.length > 6) it.trail.shift();
 
-      // 接住判定:落到托盘高度且水平重叠
       if (it.y + it.r >= catchY && it.y - it.r <= catchY + p.h) {
         if (Math.abs(it.x - p.x) <= p.w / 2 + it.r * 0.6) {
           if (it.bad) {
             this.hp -= 20;
-            this.shake = 12;
-            this.addPop(it.x, catchY - 24, it.t + " -20", "#ff5b6b");
+            this.shake = Math.max(this.shake, 16);
+            this.flash = 0.6;
+            this.hpPulse = 1;
+            this.combo = 0;
+            this.player.sy = 0.55; this.player.sx = 1.3;
+            this.burst(it.x, catchY - 10, "#ff5b6b", 24, 1.1);
+            this.ring(it.x, catchY - 10, "rgba(255,91,107,0.85)");
+            this.addPop(it.x, catchY - 28, it.t + " -20", "#ff5b6b");
+            audio.bad();
             if (this.hp <= 0) { this.hp = 0; this.gameOver(); }
           } else {
+            this.combo++;
+            this.comboTimer = 2.6;
+            this.comboPulse = 1;
+            var gain = 10 + (this.combo >= 2 ? (this.combo - 1) * 5 : 0);
             this.hp = Math.min(100, this.hp + 6);
-            this.score += 10;
-            this.addPop(it.x, catchY - 24, it.t + " +10", "#46e08a");
+            this.score += gain;
+            this.scorePulse = 1;
+            this.player.sy = 1.35; this.player.sx = 0.8;
+            this.burst(it.x, catchY - 10, "#46e08a", 18, 1);
+            this.ring(it.x, catchY - 10, "rgba(70,224,138,0.85)");
+            this.addPop(it.x, catchY - 28, it.t + " +" + gain, "#46e08a", this.combo >= 3);
+            audio.good(this.combo - 1);
           }
           this.items.splice(i, 1);
           continue;
         }
       }
-      // 掉出屏幕
       if (it.y - it.r > H) this.items.splice(i, 1);
     }
-
-    // --- 浮动文字 ---
-    for (var j = this.pops.length - 1; j >= 0; j--) {
-      var pop = this.pops[j];
-      pop.y -= 38 * dt;
-      pop.life -= dt * 1.4;
-      if (pop.life <= 0) this.pops.splice(j, 1);
-    }
-
-    if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 40);
   };
 
   // ---------- 绘制 ----------
   Game.prototype.drawBg = function () {
-    // 渐变天花板 → 地板
     var g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, "#141b2c");
-    g.addColorStop(1, "#0c111c");
+    g.addColorStop(1, "#080c15");
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
 
-    // 格子间网格(隔板)
-    ctx.strokeStyle = "rgba(120,140,180,0.06)";
+    // 漂浮数据流
+    for (var s = 0; s < this.stars.length; s++) {
+      var st = this.stars[s];
+      ctx.globalAlpha = st.a;
+      ctx.fillStyle = "#7da2ff";
+      ctx.beginPath(); ctx.arc(st.x, st.y, st.r, 0, 6.2832); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // 格子间网格(呼吸)
+    var br = 0.05 + 0.025 * Math.sin(this.bgHue * 0.5);
+    ctx.strokeStyle = "rgba(120,140,180," + br.toFixed(3) + ")";
     ctx.lineWidth = 1;
     var step = 56;
-    for (var x = 0; x <= W; x += step) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-    }
-    for (var y = 0; y <= H; y += step) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-    }
-    // 地板
+    for (var x = 0; x <= W; x += step) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+    for (var y = 0; y <= H; y += step) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
     ctx.fillStyle = "rgba(90,110,150,0.10)";
     ctx.fillRect(0, H - 46, W, 46);
+  };
+
+  Game.prototype.drawItems = function () {
+    for (var i = 0; i < this.items.length; i++) {
+      var it = this.items[i];
+      // 拖尾
+      for (var k = 0; k < it.trail.length; k++) {
+        var tr = it.trail[k];
+        ctx.globalAlpha = (k / it.trail.length) * 0.18;
+        ctx.beginPath();
+        ctx.arc(tr.x, tr.y, it.r * (0.5 + k / it.trail.length * 0.5), 0, 6.2832);
+        ctx.fillStyle = it.bad ? "#ff5b6b" : "#46e08a";
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      // 脉冲光环
+      var pulse = 1 + 0.08 * Math.sin(this.t * 6 + it.x);
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, it.r * pulse, 0, 6.2832);
+      ctx.fillStyle = it.bad ? "rgba(255,91,107,0.18)" : "rgba(70,224,138,0.18)";
+      ctx.fill();
+      ctx.lineWidth = 2.2;
+      ctx.strokeStyle = it.bad ? "rgba(255,91,107,0.7)" : "rgba(70,224,138,0.7)";
+      ctx.stroke();
+      // emoji(轻微旋转)
+      ctx.save();
+      ctx.translate(it.x, it.y + 1);
+      ctx.rotate(Math.sin(it.spin) * 0.18);
+      ctx.font = (it.r * 1.3 | 0) + "px serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(it.e, 0, 0);
+      ctx.restore();
+    }
+  };
+
+  Game.prototype.drawRings = function () {
+    for (var i = 0; i < this.rings.length; i++) {
+      var r = this.rings[i];
+      ctx.globalAlpha = Math.max(0, r.life);
+      ctx.lineWidth = 3 * r.life + 0.5;
+      ctx.strokeStyle = r.color;
+      ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, 6.2832); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  Game.prototype.drawParticles = function () {
+    for (var i = 0; i < this.parts.length; i++) {
+      var p = this.parts[i];
+      ctx.globalAlpha = clamp(p.life / p.max, 0, 1);
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(0.5, p.r * (p.life / p.max)), 0, 6.2832); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  Game.prototype.drawShards = function () {
+    for (var i = 0; i < this.shards.length; i++) {
+      var s = this.shards[i];
+      ctx.save();
+      ctx.globalAlpha = clamp(s.life, 0, 1);
+      ctx.translate(s.x, s.y); ctx.rotate(s.rot);
+      ctx.fillStyle = s.color;
+      ctx.fillRect(-s.s / 2, -s.s / 2, s.s, s.s);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
   };
 
   Game.prototype.drawPlayer = function () {
     var p = this.player;
     var y = H - 70;
-    // 托盘(双手接物的桌面)
+    ctx.save();
+    ctx.translate(p.x, y + p.h);
+    ctx.scale(p.sx, p.sy);
+    ctx.translate(-p.x, -(y + p.h));
+    // 托盘 + 发光
+    ctx.shadowColor = "rgba(125,162,255,0.6)";
+    ctx.shadowBlur = 14;
     ctx.fillStyle = "#7da2ff";
     roundRect(ctx, p.x - p.w / 2, y, p.w, p.h, 8);
     ctx.fill();
-    // 打工人脑袋
+    ctx.shadowBlur = 0;
     ctx.font = "30px serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText("🧑‍💼", p.x, y - 22);
-  };
-
-  Game.prototype.drawItems = function () {
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    for (var i = 0; i < this.items.length; i++) {
-      var it = this.items[i];
-      // 圆底盘
-      ctx.beginPath();
-      ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
-      ctx.fillStyle = it.bad ? "rgba(255,91,107,0.16)" : "rgba(70,224,138,0.16)";
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = it.bad ? "rgba(255,91,107,0.6)" : "rgba(70,224,138,0.6)";
-      ctx.stroke();
-      // emoji
-      ctx.font = (it.r * 1.3 | 0) + "px serif";
-      ctx.fillText(it.e, it.x, it.y + 1);
-    }
+    ctx.restore();
   };
 
   Game.prototype.drawPops = function () {
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
     for (var i = 0; i < this.pops.length; i++) {
       var p = this.pops[i];
-      ctx.globalAlpha = Math.max(0, Math.min(1, p.life));
+      ctx.globalAlpha = clamp(p.life, 0, 1);
       ctx.fillStyle = p.color;
-      ctx.font = "bold 15px sans-serif";
+      var sz = Math.round(15 * p.scale);
+      ctx.font = "bold " + sz + "px sans-serif";
       ctx.fillText(p.text, p.x, p.y);
     }
     ctx.globalAlpha = 1;
   };
 
+  Game.prototype.drawVignette = function () {
+    // 低血量边缘红色脉动警告
+    if (this.hp >= 35 && this.flash <= 0) return;
+    var danger = this.hp < 35 ? (1 - this.hp / 35) : 0;
+    var pulse = 0.5 + 0.5 * Math.sin(this.t * 8);
+    var a = clamp(danger * (0.25 + 0.35 * pulse) + this.flash * 0.5, 0, 0.8);
+    if (a <= 0.01) return;
+    var g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.32, W / 2, H / 2, Math.max(W, H) * 0.72);
+    g.addColorStop(0, "rgba(255,40,60,0)");
+    g.addColorStop(1, "rgba(255,40,60," + a.toFixed(3) + ")");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  };
+
+  Game.prototype.drawOverFlash = function () {
+    if (this.overFlash <= 0) return;
+    ctx.fillStyle = "rgba(255,60,80," + (this.overFlash * 0.5).toFixed(3) + ")";
+    ctx.fillRect(0, 0, W, H);
+  };
+
   Game.prototype.drawHUD = function () {
-    // 血条(职场存活值)
     var bw = Math.min(W - 40, 320), bh = 16, bx = 20, by = 20;
+    // 血条底
     ctx.fillStyle = "rgba(255,255,255,0.08)";
     roundRect(ctx, bx, by, bw, bh, 8); ctx.fill();
     var ratio = this.hp / 100;
     var col = this.hp > 50 ? "#46e08a" : (this.hp > 25 ? "#ffc046" : "#ff5b6b");
+    // 受击脉冲:血条放大一点
+    var hpScale = 1 + this.hpPulse * 0.12;
+    ctx.save();
+    ctx.translate(bx, by + bh / 2); ctx.scale(1, hpScale); ctx.translate(-bx, -(by + bh / 2));
     ctx.fillStyle = col;
+    if (this.hp <= 25) { ctx.shadowColor = "#ff5b6b"; ctx.shadowBlur = 10 + 8 * Math.sin(this.t * 10); }
     roundRect(ctx, bx, by, Math.max(2, bw * ratio), bh, 8); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.restore();
     ctx.fillStyle = "#cfd6e4";
     ctx.font = "bold 12px sans-serif";
     ctx.textAlign = "left"; ctx.textBaseline = "middle";
@@ -294,20 +590,43 @@
 
     // 在职天数
     ctx.textAlign = "right";
+    var dScale = 1 + this.scorePulse * 0.25;
+    ctx.save();
+    ctx.translate(W - 20, by + 8); ctx.scale(dScale, dScale);
     ctx.font = "bold 18px sans-serif";
     ctx.fillStyle = "#eef2f9";
-    ctx.fillText("在职 " + this.days + " 天", W - 20, by + 8);
+    ctx.fillText("在职 " + this.days + " 天", 0, 0);
+    ctx.restore();
+
+    // 连击
+    if (this.combo >= 2) {
+      var cs = 1 + this.comboPulse * 0.5;
+      ctx.save();
+      ctx.translate(W / 2, by + 64); ctx.scale(cs, cs);
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = "#ffc046";
+      ctx.shadowColor = "rgba(255,192,70,0.7)"; ctx.shadowBlur = 12;
+      ctx.font = "bold 30px sans-serif";
+      ctx.fillText("🔥 x" + this.combo, 0, 0);
+      ctx.shadowBlur = 0;
+      ctx.restore();
+      // combo 计时条
+      var cw = 80, cx = W / 2 - cw / 2, cy = by + 86;
+      ctx.fillStyle = "rgba(255,192,70,0.25)";
+      roundRect(ctx, cx, cy, cw, 4, 2); ctx.fill();
+      ctx.fillStyle = "#ffc046";
+      roundRect(ctx, cx, cy, cw * clamp(this.comboTimer / 2.6, 0, 1), 4, 2); ctx.fill();
+    }
   };
 
   function drawCenterCard(lines) {
     var cw = Math.min(W - 48, 360);
     var ch = lines.reduce(function (s, l) { return s + l.gap; }, 60);
     var cx = W / 2, cy = H / 2;
-    ctx.fillStyle = "rgba(16,22,36,0.86)";
+    ctx.fillStyle = "rgba(12,18,30,0.9)";
     roundRect(ctx, cx - cw / 2, cy - ch / 2, cw, ch, 16); ctx.fill();
-    ctx.strokeStyle = "rgba(125,162,255,0.4)"; ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "rgba(125,162,255,0.45)"; ctx.lineWidth = 1.5;
     roundRect(ctx, cx - cw / 2, cy - ch / 2, cw, ch, 16); ctx.stroke();
-
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     var y = cy - ch / 2 + 34;
     for (var i = 0; i < lines.length; i++) {
@@ -323,7 +642,7 @@
     drawCenterCard([
       { text: "今天我被优化了", font: "bold 26px sans-serif", color: "#7da2ff", gap: 42 },
       { text: "接住 💰 续命,躲开 📋 优化", font: "14px sans-serif", color: "#aeb8cc", gap: 30 },
-      { text: "活得越久,在职天数越高", font: "13px sans-serif", color: "#7f8aa0", gap: 40 },
+      { text: "连击越高加分越多,活得越久越牛", font: "13px sans-serif", color: "#7f8aa0", gap: 40 },
       { text: "点击 / 按空格 开始打工", font: "bold 16px sans-serif", color: "#46e08a", gap: 24 }
     ]);
   };
@@ -345,16 +664,20 @@
     }
     this.drawBg();
     this.drawItems();
-    this.drawPlayer();
+    this.drawRings();
+    this.drawShards();
+    this.drawParticles();
+    if (this.state !== "over") this.drawPlayer();
     this.drawPops();
     ctx.restore();
 
+    this.drawVignette();
+    this.drawOverFlash();
     this.drawHUD();
     if (this.state === "ready") this.drawReady();
     else if (this.state === "over") this.drawOver();
   };
 
-  // 圆角矩形辅助
   function roundRect(c, x, y, w, h, r) {
     r = Math.min(r, w / 2, h / 2);
     c.beginPath();
@@ -368,9 +691,10 @@
 
   // ---------- 输入 ----------
   var game = new Game();
-  window.game = game; // 供自动化核验读取状态
+  window.game = game;
 
   function tap() {
+    audio.unlock();
     if (game.state === "ready" || game.state === "over") game.start();
   }
 
@@ -386,11 +710,11 @@
 
   function pointerPos(e) {
     var rect = canvas.getBoundingClientRect();
-    var cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
-    return cx;
+    return (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
   }
   function onDown(e) {
     e.preventDefault();
+    audio.unlock();
     if (game.state !== "playing") { tap(); return; }
     game.pointerX = pointerPos(e);
   }
@@ -412,8 +736,10 @@
   var last = 0;
   function loop(ts) {
     if (!last) last = ts;
-    var dt = Math.min(0.05, (ts - last) / 1000); // 钳制,防卡顿后大跳
+    var dt = Math.min(0.05, (ts - last) / 1000);
     last = ts;
+    // 被优化瞬间的慢动作
+    if (game.slowmo > 0) dt *= lerp(1, 0.25, clamp(game.slowmo, 0, 1));
     game.update(dt);
     game.render();
     requestAnimationFrame(loop);
