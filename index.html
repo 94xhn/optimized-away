@@ -67,7 +67,6 @@
       if (this.ctx.state === "suspended") this.ctx.resume();
     } catch (e) { this.ok = false; }
   };
-  // 单音:可滑音 + ADSR 衰减
   Audio2.prototype.tone = function (freq, dur, type, vol, slideTo) {
     if (!this.ok || !this.ctx) return;
     var t = this.ctx.currentTime;
@@ -82,7 +81,6 @@
     o.connect(g); g.connect(this.master);
     o.start(t); o.stop(t + dur + 0.03);
   };
-  // 噪声爆破(受击 / 失败)
   Audio2.prototype.noise = function (dur, vol, cut) {
     if (!this.ok || !this.ctx) return;
     var t = this.ctx.currentTime;
@@ -96,13 +94,12 @@
     src.connect(f); f.connect(g); g.connect(this.master);
     src.start(t);
   };
-  // 大调音阶,连续接好物时音高持续爬升 = 上瘾引擎
   var SCALE = [0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 19, 21, 24];
   Audio2.prototype.good = function (step) {
     var semi = SCALE[Math.min(step, SCALE.length - 1)];
-    var freq = 392 * Math.pow(2, semi / 12); // 基准 G4
+    var freq = 392 * Math.pow(2, semi / 12);
     this.tone(freq, 0.14, "triangle", 0.32);
-    this.tone(freq * 2, 0.10, "sine", 0.12); // 高八度泛音点缀
+    this.tone(freq * 2, 0.10, "sine", 0.12);
   };
   Audio2.prototype.bad = function () {
     this.tone(180, 0.22, "sawtooth", 0.34, 64);
@@ -124,6 +121,23 @@
   Audio2.prototype.milestone = function () {
     this.tone(880, 0.10, "square", 0.18);
     this.tone(1320, 0.12, "square", 0.14);
+  };
+  // 逆袭时刻:上行号角琶音
+  Audio2.prototype.fever = function () {
+    var self = this;
+    [392, 494, 587, 698, 880, 1047].forEach(function (f, i) {
+      setTimeout(function () { self.tone(f, 0.16, "square", 0.26); }, i * 55);
+    });
+  };
+  // 反杀:暴击高音
+  Audio2.prototype.smash = function () {
+    this.tone(1047, 0.10, "square", 0.26);
+    this.tone(1568, 0.12, "square", 0.18);
+  };
+  Audio2.prototype.feverEnd = function () {
+    this.tone(523, 0.30, "triangle", 0.26);
+    this.tone(659, 0.30, "triangle", 0.20);
+    this.tone(784, 0.34, "triangle", 0.18);
   };
 
   // ---------- 文案库(梗)----------
@@ -159,6 +173,9 @@
 
   var audio = new Audio2();
 
+  var FEVER_DUR = 6;     // 逆袭时刻持续秒数
+  var BASE_W = 92;       // 托盘基准宽
+
   // ---------- 游戏 ----------
   function Game() {
     this.state = "ready";
@@ -169,13 +186,9 @@
 
   Game.prototype.initStars = function () {
     this.stars = [];
-    var n = Math.round((W * H) / 22000);
-    n = clamp(n, 24, 70);
+    var n = clamp(Math.round((W * H) / 22000), 24, 70);
     for (var i = 0; i < n; i++) {
-      this.stars.push({
-        x: Math.random() * W, y: Math.random() * H,
-        r: rand(0.6, 2.2), v: rand(8, 28), a: rand(0.05, 0.35)
-      });
+      this.stars.push({ x: Math.random() * W, y: Math.random() * H, r: rand(0.6, 2.2), v: rand(8, 28), a: rand(0.05, 0.35) });
     }
   };
 
@@ -186,22 +199,28 @@
     this.days = 0;
     this.items = [];
     this.pops = [];
-    this.parts = [];     // 粒子
-    this.rings = [];     // 冲击波
-    this.shards = [];    // 被优化时的碎块
+    this.parts = [];
+    this.rings = [];
+    this.shards = [];
     this.spawnTimer = 0;
     this.shake = 0;
-    this.flash = 0;      // 受击红闪
-    this.overFlash = 0;  // 被优化整屏闪
-    this.slowmo = 0;     // 慢动作系数(被优化瞬间)
+    this.flash = 0;
+    this.overFlash = 0;
+    this.slowmo = 0;
     this.combo = 0;
     this.comboTimer = 0;
     this.comboPulse = 0;
     this.hpPulse = 0;
     this.scorePulse = 0;
     this.bgHue = 0;
-    this.nextMile = 15;  // 下一个里程碑天数
-    this.player = { x: W / 2, w: 92, h: 18, speed: 540, sy: 1, sx: 1 };
+    this.nextMile = 15;
+    // —— 爽点核心:逆袭值 + 逆袭时刻 ——
+    this.rage = 0;        // 逆袭值 0→100
+    this.fever = 0;       // >0 = 逆袭时刻剩余秒数
+    this.feverFlash = 0;  // 进入逆袭的金闪
+    this.feverGain = 0;   // 本波逆袭累计得分(收尾结算用)
+    this.ragePulse = 0;
+    this.player = { x: W / 2, w: BASE_W, h: 18, speed: 540, sy: 1, sx: 1 };
     this.keyL = false; this.keyR = false;
     this.pointerX = null;
     if (!this.stars.length) this.initStars();
@@ -216,11 +235,12 @@
 
   Game.prototype.gameOver = function () {
     this.state = "over";
+    this.fever = 0;
+    this.player.w = BASE_W;
     this.overFlash = 1;
     this.slowmo = 1;
     this.shake = 26;
     audio.over();
-    // 托盘炸成碎块
     var p = this.player, y = H - 70;
     for (var i = 0; i < 16; i++) {
       this.shards.push({
@@ -237,7 +257,33 @@
     }
   };
 
+  // —— 逆袭时刻:蓄力释放的高潮 ——
+  Game.prototype.startFever = function () {
+    this.fever = FEVER_DUR;
+    this.feverFlash = 1;
+    this.feverGain = 0;
+    this.player.w = BASE_W * 2.4;     // 托盘横跨大半屏
+    this.shake = Math.max(this.shake, 16);
+    this.addPop(W / 2, H * 0.34, "🔥 逆袭时刻!", "#ffd24a", true);
+    this.ring(W / 2, H * 0.34, "rgba(255,210,74,0.95)");
+    this.burst(W / 2, H * 0.34, "#ffd24a", 40, 1.4);
+    audio.fever();
+  };
+
+  Game.prototype.endFever = function () {
+    this.fever = 0;
+    this.rage = 0;
+    this.player.w = BASE_W;
+    this.addPop(W / 2, H * 0.4, "这波 +" + this.feverGain + ",不亏!", "#ffd24a", true);
+    this.burst(this.player.x, H - 80, "#ffd24a", 30, 1.2);
+    audio.feverEnd();
+  };
+
   Game.prototype.difficulty = function () {
+    if (this.fever > 0) {
+      // 逆袭期:刷屏,多数好物,少量坏物当反杀靶
+      return { fall: 200 + (this.t / 45) * 120, interval: 0.24, badRatio: 0.30 };
+    }
     var d = this.t / 45;
     return {
       fall: 150 + d * 240,
@@ -270,28 +316,23 @@
       var a = Math.random() * 6.2832;
       var sp = rand(40, 320) * power;
       this.parts.push({
-        x: x, y: y,
-        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - rand(0, 80),
-        life: rand(0.4, 0.9), max: 0.9,
-        r: rand(2, 5) * power, color: color
+        x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - rand(0, 80),
+        life: rand(0.4, 0.9), max: 0.9, r: rand(2, 5) * power, color: color
       });
     }
-    if (this.parts.length > 280) this.parts.splice(0, this.parts.length - 280);
+    if (this.parts.length > 320) this.parts.splice(0, this.parts.length - 320);
   };
 
   Game.prototype.ring = function (x, y, color) {
     this.rings.push({ x: x, y: y, r: 10, max: rand(46, 64), life: 1, color: color });
   };
 
-  // 特效层:任何状态都更新(让被优化特效播完)
   Game.prototype.updateFx = function (dt) {
-    // 漂浮数据流
     for (var s = 0; s < this.stars.length; s++) {
       var st = this.stars[s];
       st.y -= st.v * dt;
       if (st.y < -4) { st.y = H + 4; st.x = Math.random() * W; }
     }
-    // 粒子
     for (var i = this.parts.length - 1; i >= 0; i--) {
       var pt = this.parts[i];
       pt.vy += 520 * dt;
@@ -299,14 +340,12 @@
       pt.life -= dt;
       if (pt.life <= 0) this.parts.splice(i, 1);
     }
-    // 冲击波
     for (var k = this.rings.length - 1; k >= 0; k--) {
       var rg = this.rings[k];
       rg.r += (rg.max - rg.r) * Math.min(1, dt * 9);
       rg.life -= dt * 2.2;
       if (rg.life <= 0) this.rings.splice(k, 1);
     }
-    // 碎块
     for (var m = this.shards.length - 1; m >= 0; m--) {
       var sh = this.shards[m];
       sh.vy += 760 * dt;
@@ -314,7 +353,6 @@
       sh.rot += sh.vr * dt; sh.life -= dt * 0.7;
       if (sh.life <= 0 || sh.y > H + 40) this.shards.splice(m, 1);
     }
-    // 浮动文字
     for (var j = this.pops.length - 1; j >= 0; j--) {
       var pop = this.pops[j];
       pop.y += pop.vy * dt; pop.vy *= 0.92;
@@ -322,7 +360,6 @@
       pop.life -= dt * 1.3;
       if (pop.life <= 0) this.pops.splice(j, 1);
     }
-    // 衰减
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 42);
     if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 2.6);
     if (this.overFlash > 0) this.overFlash = Math.max(0, this.overFlash - dt * 1.4);
@@ -330,6 +367,8 @@
     if (this.comboPulse > 0) this.comboPulse = Math.max(0, this.comboPulse - dt * 3);
     if (this.hpPulse > 0) this.hpPulse = Math.max(0, this.hpPulse - dt * 3);
     if (this.scorePulse > 0) this.scorePulse = Math.max(0, this.scorePulse - dt * 4);
+    if (this.ragePulse > 0) this.ragePulse = Math.max(0, this.ragePulse - dt * 3);
+    if (this.feverFlash > 0) this.feverFlash = Math.max(0, this.feverFlash - dt * 1.6);
     this.player.sy += (1 - this.player.sy) * Math.min(1, dt * 12);
     this.player.sx += (1 - this.player.sx) * Math.min(1, dt * 12);
     this.bgHue += dt * 6;
@@ -342,21 +381,24 @@
     this.t += dt;
     this.days = Math.floor(this.t);
 
-    // 里程碑提示
+    // 逆袭时刻计时
+    if (this.fever > 0) {
+      this.fever -= dt;
+      if (this.fever <= 0) this.endFever();
+    }
+
     if (this.days >= this.nextMile) {
       this.nextMile += 15;
       audio.milestone();
-      this.addPop(W / 2, H * 0.32, "在职 " + this.days + " 天!", "#ffc046", true);
-      this.ring(W / 2, H * 0.32, "rgba(255,192,70,0.8)");
+      this.addPop(W / 2, H * 0.30, "在职 " + this.days + " 天!", "#ffc046", true);
+      this.ring(W / 2, H * 0.30, "rgba(255,192,70,0.8)");
     }
 
-    // combo 超时清零
     if (this.combo > 0) {
       this.comboTimer -= dt;
       if (this.comboTimer <= 0) this.combo = 0;
     }
 
-    // 玩家移动
     var p = this.player;
     if (this.pointerX != null) {
       p.x += (this.pointerX - p.x) * Math.min(1, dt * 16);
@@ -366,30 +408,46 @@
     }
     p.x = clamp(p.x, p.w / 2, W - p.w / 2);
 
-    // 掉落物生成
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0) {
       this.spawn();
       this.spawnTimer = this.difficulty().interval;
     }
 
+    var dying = this.hp < 30;
     var catchY = H - 70;
     for (var i = this.items.length - 1; i >= 0; i--) {
       var it = this.items[i];
       it.y += it.vy * dt;
       it.spin += it.vspin * dt;
-      // 拖尾采样
+
+      // —— 磁吸收割 —— 逆袭期全吸;平时高连击时吸好物
+      if (this.fever > 0) {
+        it.x += (p.x - it.x) * Math.min(1, dt * 7);
+      } else if (!it.bad && this.combo >= 3) {
+        it.x += (p.x - it.x) * Math.min(0.9, dt * this.combo * 0.7);
+      }
+
       it.trail.push({ x: it.x, y: it.y });
       if (it.trail.length > 6) it.trail.shift();
 
       if (it.y + it.r >= catchY && it.y - it.r <= catchY + p.h) {
         if (Math.abs(it.x - p.x) <= p.w / 2 + it.r * 0.6) {
-          if (it.bad) {
+          if (this.fever > 0) {
+            // 逆袭期:无敌,接到啥都暴击加分;坏物=反杀老板
+            var fg = it.bad ? 25 : 30;
+            this.score += fg; this.feverGain += fg; this.scorePulse = 1;
+            this.player.sy = 1.3; this.player.sx = 0.85;
+            var fc = it.bad ? "#ffd24a" : "#46e08a";
+            this.burst(it.x, catchY - 10, fc, 22, 1.2);
+            this.ring(it.x, catchY - 10, it.bad ? "rgba(255,210,74,0.9)" : "rgba(70,224,138,0.9)");
+            this.addPop(it.x, catchY - 28, (it.bad ? "反杀 " + it.t : it.t) + " +" + fg, fc, it.bad);
+            if (it.bad) audio.smash(); else audio.good(8);
+          } else if (it.bad) {
             this.hp -= 20;
             this.shake = Math.max(this.shake, 16);
-            this.flash = 0.6;
-            this.hpPulse = 1;
-            this.combo = 0;
+            this.flash = 0.6; this.hpPulse = 1; this.combo = 0;
+            this.rage = Math.max(0, this.rage - 15);
             this.player.sy = 0.55; this.player.sx = 1.3;
             this.burst(it.x, catchY - 10, "#ff5b6b", 24, 1.1);
             this.ring(it.x, catchY - 10, "rgba(255,91,107,0.85)");
@@ -398,17 +456,19 @@
             if (this.hp <= 0) { this.hp = 0; this.gameOver(); }
           } else {
             this.combo++;
-            this.comboTimer = 2.6;
-            this.comboPulse = 1;
+            this.comboTimer = 2.6; this.comboPulse = 1;
             var gain = 10 + (this.combo >= 2 ? (this.combo - 1) * 5 : 0);
-            this.hp = Math.min(100, this.hp + 6);
-            this.score += gain;
-            this.scorePulse = 1;
+            this.hp = Math.min(100, this.hp + (dying ? 12 : 6));   // 濒死回血翻倍
+            this.score += gain; this.scorePulse = 1;
+            // 攒逆袭值:连击越高越快,濒死时更快
+            this.rage = Math.min(100, this.rage + (8 + this.combo * 1.5) * (dying ? 1.6 : 1));
+            this.ragePulse = 1;
             this.player.sy = 1.35; this.player.sx = 0.8;
             this.burst(it.x, catchY - 10, "#46e08a", 18, 1);
             this.ring(it.x, catchY - 10, "rgba(70,224,138,0.85)");
             this.addPop(it.x, catchY - 28, it.t + " +" + gain, "#46e08a", this.combo >= 3);
             audio.good(this.combo - 1);
+            if (this.rage >= 100 && this.fever <= 0) this.startFever();
           }
           this.items.splice(i, 1);
           continue;
@@ -421,23 +481,21 @@
   // ---------- 绘制 ----------
   Game.prototype.drawBg = function () {
     var g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, "#141b2c");
-    g.addColorStop(1, "#080c15");
+    if (this.fever > 0) { g.addColorStop(0, "#3a2a10"); g.addColorStop(1, "#1a1205"); }
+    else { g.addColorStop(0, "#141b2c"); g.addColorStop(1, "#080c15"); }
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
 
-    // 漂浮数据流
     for (var s = 0; s < this.stars.length; s++) {
       var st = this.stars[s];
       ctx.globalAlpha = st.a;
-      ctx.fillStyle = "#7da2ff";
+      ctx.fillStyle = this.fever > 0 ? "#ffd24a" : "#7da2ff";
       ctx.beginPath(); ctx.arc(st.x, st.y, st.r, 0, 6.2832); ctx.fill();
     }
     ctx.globalAlpha = 1;
 
-    // 格子间网格(呼吸)
     var br = 0.05 + 0.025 * Math.sin(this.bgHue * 0.5);
-    ctx.strokeStyle = "rgba(120,140,180," + br.toFixed(3) + ")";
+    ctx.strokeStyle = (this.fever > 0 ? "rgba(255,210,74," : "rgba(120,140,180,") + br.toFixed(3) + ")";
     ctx.lineWidth = 1;
     var step = 56;
     for (var x = 0; x <= W; x += step) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
@@ -450,7 +508,6 @@
   Game.prototype.drawItems = function () {
     for (var i = 0; i < this.items.length; i++) {
       var it = this.items[i];
-      // 拖尾
       for (var k = 0; k < it.trail.length; k++) {
         var tr = it.trail[k];
         ctx.globalAlpha = (k / it.trail.length) * 0.18;
@@ -460,7 +517,6 @@
         ctx.fill();
       }
       ctx.globalAlpha = 1;
-      // 脉冲光环
       var pulse = 1 + 0.08 * Math.sin(this.t * 6 + it.x);
       ctx.beginPath();
       ctx.arc(it.x, it.y, it.r * pulse, 0, 6.2832);
@@ -469,7 +525,6 @@
       ctx.lineWidth = 2.2;
       ctx.strokeStyle = it.bad ? "rgba(255,91,107,0.7)" : "rgba(70,224,138,0.7)";
       ctx.stroke();
-      // emoji(轻微旋转)
       ctx.save();
       ctx.translate(it.x, it.y + 1);
       ctx.rotate(Math.sin(it.spin) * 0.18);
@@ -517,20 +572,20 @@
   Game.prototype.drawPlayer = function () {
     var p = this.player;
     var y = H - 70;
+    var fev = this.fever > 0;
     ctx.save();
     ctx.translate(p.x, y + p.h);
     ctx.scale(p.sx, p.sy);
     ctx.translate(-p.x, -(y + p.h));
-    // 托盘 + 发光
-    ctx.shadowColor = "rgba(125,162,255,0.6)";
-    ctx.shadowBlur = 14;
-    ctx.fillStyle = "#7da2ff";
+    ctx.shadowColor = fev ? "rgba(255,210,74,0.9)" : "rgba(125,162,255,0.6)";
+    ctx.shadowBlur = fev ? 22 : 14;
+    ctx.fillStyle = fev ? "#ffd24a" : "#7da2ff";
     roundRect(ctx, p.x - p.w / 2, y, p.w, p.h, 8);
     ctx.fill();
     ctx.shadowBlur = 0;
     ctx.font = "30px serif";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText("🧑‍💼", p.x, y - 22);
+    ctx.fillText(fev ? "😤" : "🧑‍💼", p.x, y - 22);
     ctx.restore();
   };
 
@@ -548,7 +603,6 @@
   };
 
   Game.prototype.drawVignette = function () {
-    // 低血量边缘红色脉动警告
     if (this.hp >= 35 && this.flash <= 0) return;
     var danger = this.hp < 35 ? (1 - this.hp / 35) : 0;
     var pulse = 0.5 + 0.5 * Math.sin(this.t * 8);
@@ -561,6 +615,22 @@
     ctx.fillRect(0, 0, W, H);
   };
 
+  Game.prototype.drawFeverFX = function () {
+    if (this.feverFlash > 0) {
+      ctx.fillStyle = "rgba(255,200,60," + (this.feverFlash * 0.45).toFixed(3) + ")";
+      ctx.fillRect(0, 0, W, H);
+    }
+    if (this.fever > 0) {
+      var pulse = 0.5 + 0.5 * Math.sin(this.t * 12);
+      var a = 0.12 + 0.12 * pulse;
+      var g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.30, W / 2, H / 2, Math.max(W, H) * 0.75);
+      g.addColorStop(0, "rgba(255,200,60,0)");
+      g.addColorStop(1, "rgba(255,180,30," + a.toFixed(3) + ")");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+  };
+
   Game.prototype.drawOverFlash = function () {
     if (this.overFlash <= 0) return;
     ctx.fillStyle = "rgba(255,60,80," + (this.overFlash * 0.5).toFixed(3) + ")";
@@ -569,12 +639,11 @@
 
   Game.prototype.drawHUD = function () {
     var bw = Math.min(W - 40, 320), bh = 16, bx = 20, by = 20;
-    // 血条底
+    // 血条
     ctx.fillStyle = "rgba(255,255,255,0.08)";
     roundRect(ctx, bx, by, bw, bh, 8); ctx.fill();
     var ratio = this.hp / 100;
     var col = this.hp > 50 ? "#46e08a" : (this.hp > 25 ? "#ffc046" : "#ff5b6b");
-    // 受击脉冲:血条放大一点
     var hpScale = 1 + this.hpPulse * 0.12;
     ctx.save();
     ctx.translate(bx, by + bh / 2); ctx.scale(1, hpScale); ctx.translate(-bx, -(by + bh / 2));
@@ -588,6 +657,33 @@
     ctx.textAlign = "left"; ctx.textBaseline = "middle";
     ctx.fillText("职场存活值", bx + 2, by - 10);
 
+    // —— 逆袭值槽(血条下方)——
+    var ry = by + bh + 8, rh = 10;
+    ctx.fillStyle = "rgba(255,255,255,0.06)";
+    roundRect(ctx, bx, ry, bw, rh, 5); ctx.fill();
+    if (this.fever > 0) {
+      // 逆袭进行中:显示剩余时间(金色递减 + 闪烁)
+      var fr = clamp(this.fever / FEVER_DUR, 0, 1);
+      ctx.fillStyle = "#ffd24a";
+      ctx.shadowColor = "#ffd24a"; ctx.shadowBlur = 10 + 6 * Math.sin(this.t * 14);
+      roundRect(ctx, bx, ry, Math.max(2, bw * fr), rh, 5); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "#ffd24a";
+      ctx.fillText("🔥 逆袭中 ×3 反杀!", bx + 2, ry + rh + 9);
+    } else {
+      var rgScale = 1 + this.ragePulse * 0.1;
+      ctx.save();
+      ctx.translate(bx, ry + rh / 2); ctx.scale(1, rgScale); ctx.translate(-bx, -(ry + rh / 2));
+      var full = this.rage >= 100;
+      ctx.fillStyle = full ? "#ffd24a" : "#ff9a3a";
+      if (full) { ctx.shadowColor = "#ffd24a"; ctx.shadowBlur = 12; }
+      roundRect(ctx, bx, ry, Math.max(2, bw * (this.rage / 100), 0), rh, 5); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.restore();
+      ctx.fillStyle = "#caa86a";
+      ctx.fillText("逆袭值 " + (this.rage | 0) + "%", bx + 2, ry + rh + 9);
+    }
+
     // 在职天数
     ctx.textAlign = "right";
     var dScale = 1 + this.scorePulse * 0.25;
@@ -597,12 +693,27 @@
     ctx.fillStyle = "#eef2f9";
     ctx.fillText("在职 " + this.days + " 天", 0, 0);
     ctx.restore();
+    ctx.textAlign = "right";
+    ctx.font = "bold 12px sans-serif";
+    ctx.fillStyle = "#7f8aa0";
+    ctx.fillText("积分 " + this.score, W - 20, by + 30);
 
-    // 连击
-    if (this.combo >= 2) {
-      var cs = 1 + this.comboPulse * 0.5;
+    // 逆袭大字 / 连击
+    if (this.fever > 0) {
+      var cs = 1 + Math.max(0, this.feverFlash) * 0.4;
       ctx.save();
-      ctx.translate(W / 2, by + 64); ctx.scale(cs, cs);
+      ctx.translate(W / 2, by + 78); ctx.scale(cs, cs);
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = "#ffd24a";
+      ctx.shadowColor = "rgba(255,210,74,0.8)"; ctx.shadowBlur = 16;
+      ctx.font = "bold 30px sans-serif";
+      ctx.fillText("🔥 逆袭时刻 " + Math.ceil(this.fever) + "s", 0, 0);
+      ctx.shadowBlur = 0;
+      ctx.restore();
+    } else if (this.combo >= 2) {
+      var ccs = 1 + this.comboPulse * 0.5;
+      ctx.save();
+      ctx.translate(W / 2, by + 78); ctx.scale(ccs, ccs);
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillStyle = "#ffc046";
       ctx.shadowColor = "rgba(255,192,70,0.7)"; ctx.shadowBlur = 12;
@@ -610,8 +721,7 @@
       ctx.fillText("🔥 x" + this.combo, 0, 0);
       ctx.shadowBlur = 0;
       ctx.restore();
-      // combo 计时条
-      var cw = 80, cx = W / 2 - cw / 2, cy = by + 86;
+      var cw = 80, cx = W / 2 - cw / 2, cy = by + 96;
       ctx.fillStyle = "rgba(255,192,70,0.25)";
       roundRect(ctx, cx, cy, cw, 4, 2); ctx.fill();
       ctx.fillStyle = "#ffc046";
@@ -640,19 +750,21 @@
 
   Game.prototype.drawReady = function () {
     drawCenterCard([
-      { text: "今天我被优化了", font: "bold 26px sans-serif", color: "#7da2ff", gap: 42 },
-      { text: "接住 💰 续命,躲开 📋 优化", font: "14px sans-serif", color: "#aeb8cc", gap: 30 },
-      { text: "连击越高加分越多,活得越久越牛", font: "13px sans-serif", color: "#7f8aa0", gap: 40 },
+      { text: "今天我被优化了", font: "bold 26px sans-serif", color: "#7da2ff", gap: 40 },
+      { text: "接 💰 续命,躲 📋 优化", font: "14px sans-serif", color: "#aeb8cc", gap: 28 },
+      { text: "攒满逆袭值 → 🔥 逆袭时刻", font: "bold 14px sans-serif", color: "#ffd24a", gap: 24 },
+      { text: "无敌 + 反杀老板 + 暴击 ×3", font: "12px sans-serif", color: "#caa86a", gap: 38 },
       { text: "点击 / 按空格 开始打工", font: "bold 16px sans-serif", color: "#46e08a", gap: 24 }
     ]);
   };
 
   Game.prototype.drawOver = function () {
     drawCenterCard([
-      { text: "💼 你被优化了", font: "bold 26px sans-serif", color: "#ff5b6b", gap: 44 },
-      { text: "在职 " + this.days + " 天", font: "bold 22px sans-serif", color: "#eef2f9", gap: 34 },
-      { text: verdict(this.days), font: "13px sans-serif", color: "#aeb8cc", gap: 32 },
-      { text: "最高纪录:在职 " + this.best + " 天", font: "13px sans-serif", color: "#7f8aa0", gap: 40 },
+      { text: "💼 你被优化了", font: "bold 26px sans-serif", color: "#ff5b6b", gap: 42 },
+      { text: "在职 " + this.days + " 天", font: "bold 22px sans-serif", color: "#eef2f9", gap: 30 },
+      { text: "总积分 " + this.score, font: "14px sans-serif", color: "#ffd24a", gap: 30 },
+      { text: verdict(this.days), font: "13px sans-serif", color: "#aeb8cc", gap: 30 },
+      { text: "最高纪录:在职 " + this.best + " 天", font: "13px sans-serif", color: "#7f8aa0", gap: 38 },
       { text: "点击 / 空格 再就业", font: "bold 16px sans-serif", color: "#46e08a", gap: 24 }
     ]);
   };
@@ -672,6 +784,7 @@
     ctx.restore();
 
     this.drawVignette();
+    this.drawFeverFX();
     this.drawOverFlash();
     this.drawHUD();
     if (this.state === "ready") this.drawReady();
@@ -738,7 +851,6 @@
     if (!last) last = ts;
     var dt = Math.min(0.05, (ts - last) / 1000);
     last = ts;
-    // 被优化瞬间的慢动作
     if (game.slowmo > 0) dt *= lerp(1, 0.25, clamp(game.slowmo, 0, 1));
     game.update(dt);
     game.render();
