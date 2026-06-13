@@ -25,7 +25,6 @@
 (function () {
   "use strict";
 
-  // ---------- 视口尺寸(headless / iframe 下必须有 fallback,否则 0 坍缩)----------
   function vw() { return window.innerWidth || document.documentElement.clientWidth || 400; }
   function vh() { return window.innerHeight || document.documentElement.clientHeight || 640; }
 
@@ -122,14 +121,12 @@
     this.tone(880, 0.10, "square", 0.18);
     this.tone(1320, 0.12, "square", 0.14);
   };
-  // 逆袭时刻:上行号角琶音
   Audio2.prototype.fever = function () {
     var self = this;
     [392, 494, 587, 698, 880, 1047].forEach(function (f, i) {
       setTimeout(function () { self.tone(f, 0.16, "square", 0.26); }, i * 55);
     });
   };
-  // 反杀:暴击高音
   Audio2.prototype.smash = function () {
     this.tone(1047, 0.10, "square", 0.26);
     this.tone(1568, 0.12, "square", 0.18);
@@ -139,27 +136,35 @@
     this.tone(659, 0.30, "triangle", 0.20);
     this.tone(784, 0.34, "triangle", 0.18);
   };
+  // 晋升:强力上行号角
+  Audio2.prototype.levelup = function () {
+    var self = this;
+    [523, 659, 784, 1047, 1319].forEach(function (f, i) {
+      setTimeout(function () { self.tone(f, 0.15, "square", 0.26); }, i * 60);
+    });
+  };
 
   // ---------- 文案库(梗)----------
   var GOOD = [
-    { e: "💰", t: "工资到账" },
-    { e: "☕", t: "续命咖啡" },
-    { e: "🎉", t: "项目上线" },
-    { e: "🛡️", t: "成功转正" },
-    { e: "🏆", t: "季度之星" },
-    { e: "🍗", t: "团建加餐" },
-    { e: "💡", t: "好点子" },
-    { e: "📈", t: "KPI 达标" }
+    { e: "💰", t: "工资到账" }, { e: "☕", t: "续命咖啡" }, { e: "🎉", t: "项目上线" },
+    { e: "🛡️", t: "成功转正" }, { e: "🏆", t: "季度之星" }, { e: "🍗", t: "团建加餐" },
+    { e: "💡", t: "好点子" }, { e: "📈", t: "KPI 达标" }
   ];
   var BAD = [
-    { e: "📋", t: "N+1 大礼包" },
-    { e: "⏰", t: "强制加班" },
-    { e: "🔥", t: "背锅侠" },
-    { e: "💢", t: "领导 PUA" },
-    { e: "🎂", t: "35 岁危机" },
-    { e: "🪑", t: "工位被撤" },
-    { e: "📉", t: "绩效垫底" },
-    { e: "🌧️", t: "优化通知" }
+    { e: "📋", t: "N+1 大礼包" }, { e: "⏰", t: "强制加班" }, { e: "🔥", t: "背锅侠" },
+    { e: "💢", t: "领导 PUA" }, { e: "🎂", t: "35 岁危机" }, { e: "🪑", t: "工位被撤" },
+    { e: "📉", t: "绩效垫底" }, { e: "🌧️", t: "优化通知" }
+  ];
+
+  // ---------- 职场进化形态(成长系统)----------
+  // at=升级所需积分; wm=托盘宽度倍率; tray=托盘色; perk=解锁能力说明
+  var FORMS = [
+    { name: "实习生",   emoji: "🧑‍💼", at: 0,    wm: 1.00, tray: "#7da2ff", perk: "" },
+    { name: "正式员工", emoji: "🧑‍💻", at: 120,  wm: 1.18, tray: "#5ad1ff", perk: "托盘加宽" },
+    { name: "小组长",   emoji: "👔",   at: 320,  wm: 1.34, tray: "#46e08a", perk: "接好物回血翻倍" },
+    { name: "部门主管", emoji: "🕴️",   at: 640,  wm: 1.50, tray: "#c08aff", perk: "磁吸常驻收割" },
+    { name: "打工超人", emoji: "🦸",   at: 1100, wm: 1.68, tray: "#ffc046", perk: "逆袭更快更久" },
+    { name: "卷王之王", emoji: "🐲",   at: 1800, wm: 1.90, tray: "#ff6ad0", perk: "逆袭暴击×1.5+金币雨" }
   ];
 
   function verdict(days) {
@@ -172,14 +177,14 @@
   }
 
   var audio = new Audio2();
-
-  var FEVER_DUR = 6;     // 逆袭时刻持续秒数
-  var BASE_W = 92;       // 托盘基准宽
+  var FEVER_DUR = 6;
+  var BASE_W = 92;
 
   // ---------- 游戏 ----------
   function Game() {
     this.state = "ready";
     this.best = +(localStorage.getItem("optimized_best") || 0);
+    this.bestForm = +(localStorage.getItem("optimized_bestform") || 0);
     this.stars = [];
     this.reset();
   }
@@ -214,12 +219,15 @@
     this.scorePulse = 0;
     this.bgHue = 0;
     this.nextMile = 15;
-    // —— 爽点核心:逆袭值 + 逆袭时刻 ——
-    this.rage = 0;        // 逆袭值 0→100
-    this.fever = 0;       // >0 = 逆袭时刻剩余秒数
-    this.feverFlash = 0;  // 进入逆袭的金闪
-    this.feverGain = 0;   // 本波逆袭累计得分(收尾结算用)
+    this.rage = 0;
+    this.fever = 0;
+    this.feverFlash = 0;
+    this.feverGain = 0;
     this.ragePulse = 0;
+    // —— 进化系统 ——
+    this.level = 0;
+    this.baseW = BASE_W;
+    this.levelFlash = 0;
     this.player = { x: W / 2, w: BASE_W, h: 18, speed: 540, sy: 1, sx: 1 };
     this.keyL = false; this.keyR = false;
     this.pointerX = null;
@@ -233,10 +241,14 @@
     audio.start();
   };
 
+  Game.prototype.trayW = function () {
+    return this.baseW * (this.fever > 0 ? 2.4 : 1);
+  };
+
   Game.prototype.gameOver = function () {
     this.state = "over";
     this.fever = 0;
-    this.player.w = BASE_W;
+    this.player.w = this.baseW;
     this.overFlash = 1;
     this.slowmo = 1;
     this.shake = 26;
@@ -247,7 +259,7 @@
         x: p.x + rand(-p.w / 2, p.w / 2), y: y + rand(0, p.h),
         vx: rand(-260, 260), vy: rand(-420, -120),
         rot: rand(0, 6.28), vr: rand(-10, 10),
-        s: rand(5, 12), life: 1, color: "#7da2ff"
+        s: rand(5, 12), life: 1, color: FORMS[this.level].tray
       });
     }
     this.burst(p.x, y, "#ff5b6b", 40, 1.4);
@@ -255,14 +267,34 @@
       this.best = this.days;
       try { localStorage.setItem("optimized_best", String(this.best)); } catch (e) {}
     }
+    if (this.level > this.bestForm) {
+      this.bestForm = this.level;
+      try { localStorage.setItem("optimized_bestform", String(this.bestForm)); } catch (e) {}
+    }
   };
 
-  // —— 逆袭时刻:蓄力释放的高潮 ——
+  // —— 进化:积分跨阈值时晋升形态 ——
+  Game.prototype.checkLevelUp = function () {
+    while (this.level < FORMS.length - 1 && this.score >= FORMS[this.level + 1].at) {
+      this.level++;
+      var f = FORMS[this.level];
+      this.baseW = BASE_W * f.wm;
+      this.player.w = this.trayW();
+      this.levelFlash = 1;
+      this.shake = Math.max(this.shake, 18);
+      this.addPop(W / 2, H * 0.40, "🎖️ 晋升:" + f.name, f.tray, true);
+      this.addPop(W / 2, H * 0.40 + 32, "解锁 " + f.perk, "#dfe6f2", false);
+      this.ring(W / 2, H * 0.40, "rgba(255,255,255,0.95)");
+      this.burst(W / 2, H * 0.40, f.tray, 46, 1.6);
+      audio.levelup();
+    }
+  };
+
   Game.prototype.startFever = function () {
-    this.fever = FEVER_DUR;
+    this.fever = FEVER_DUR + (this.level >= 4 ? 2 : 0);   // 打工超人:逆袭更久
     this.feverFlash = 1;
     this.feverGain = 0;
-    this.player.w = BASE_W * 2.4;     // 托盘横跨大半屏
+    this.player.w = this.trayW();
     this.shake = Math.max(this.shake, 16);
     this.addPop(W / 2, H * 0.34, "🔥 逆袭时刻!", "#ffd24a", true);
     this.ring(W / 2, H * 0.34, "rgba(255,210,74,0.95)");
@@ -273,7 +305,7 @@
   Game.prototype.endFever = function () {
     this.fever = 0;
     this.rage = 0;
-    this.player.w = BASE_W;
+    this.player.w = this.trayW();
     this.addPop(W / 2, H * 0.4, "这波 +" + this.feverGain + ",不亏!", "#ffd24a", true);
     this.burst(this.player.x, H - 80, "#ffd24a", 30, 1.2);
     audio.feverEnd();
@@ -281,7 +313,6 @@
 
   Game.prototype.difficulty = function () {
     if (this.fever > 0) {
-      // 逆袭期:刷屏,多数好物,少量坏物当反杀靶
       return { fall: 200 + (this.t / 45) * 120, interval: 0.24, badRatio: 0.30 };
     }
     var d = this.t / 45;
@@ -301,8 +332,7 @@
       x: rand(r + 8, W - r - 8), y: -r, r: r,
       vy: diff.fall * rand(0.85, 1.2),
       bad: isBad, e: data.e, t: data.t,
-      spin: rand(0, 6.28), vspin: rand(-2, 2),
-      trail: []
+      spin: rand(0, 6.28), vspin: rand(-2, 2), trail: []
     });
   };
 
@@ -320,7 +350,7 @@
         life: rand(0.4, 0.9), max: 0.9, r: rand(2, 5) * power, color: color
       });
     }
-    if (this.parts.length > 320) this.parts.splice(0, this.parts.length - 320);
+    if (this.parts.length > 340) this.parts.splice(0, this.parts.length - 340);
   };
 
   Game.prototype.ring = function (x, y, color) {
@@ -369,6 +399,7 @@
     if (this.scorePulse > 0) this.scorePulse = Math.max(0, this.scorePulse - dt * 4);
     if (this.ragePulse > 0) this.ragePulse = Math.max(0, this.ragePulse - dt * 3);
     if (this.feverFlash > 0) this.feverFlash = Math.max(0, this.feverFlash - dt * 1.6);
+    if (this.levelFlash > 0) this.levelFlash = Math.max(0, this.levelFlash - dt * 1.8);
     this.player.sy += (1 - this.player.sy) * Math.min(1, dt * 12);
     this.player.sx += (1 - this.player.sx) * Math.min(1, dt * 12);
     this.bgHue += dt * 6;
@@ -381,7 +412,6 @@
     this.t += dt;
     this.days = Math.floor(this.t);
 
-    // 逆袭时刻计时
     if (this.fever > 0) {
       this.fever -= dt;
       if (this.fever <= 0) this.endFever();
@@ -390,8 +420,8 @@
     if (this.days >= this.nextMile) {
       this.nextMile += 15;
       audio.milestone();
-      this.addPop(W / 2, H * 0.30, "在职 " + this.days + " 天!", "#ffc046", true);
-      this.ring(W / 2, H * 0.30, "rgba(255,192,70,0.8)");
+      this.addPop(W / 2, H * 0.28, "在职 " + this.days + " 天!", "#ffc046", true);
+      this.ring(W / 2, H * 0.28, "rgba(255,192,70,0.8)");
     }
 
     if (this.combo > 0) {
@@ -415,17 +445,17 @@
     }
 
     var dying = this.hp < 30;
+    var magThresh = this.level >= 3 ? 1 : 3;       // 主管:磁吸常驻
     var catchY = H - 70;
     for (var i = this.items.length - 1; i >= 0; i--) {
       var it = this.items[i];
       it.y += it.vy * dt;
       it.spin += it.vspin * dt;
 
-      // —— 磁吸收割 —— 逆袭期全吸;平时高连击时吸好物
       if (this.fever > 0) {
         it.x += (p.x - it.x) * Math.min(1, dt * 7);
-      } else if (!it.bad && this.combo >= 3) {
-        it.x += (p.x - it.x) * Math.min(0.9, dt * this.combo * 0.7);
+      } else if (!it.bad && this.combo >= magThresh) {
+        it.x += (p.x - it.x) * Math.min(0.9, dt * Math.max(this.combo, 2) * 0.7);
       }
 
       it.trail.push({ x: it.x, y: it.y });
@@ -434,12 +464,12 @@
       if (it.y + it.r >= catchY && it.y - it.r <= catchY + p.h) {
         if (Math.abs(it.x - p.x) <= p.w / 2 + it.r * 0.6) {
           if (this.fever > 0) {
-            // 逆袭期:无敌,接到啥都暴击加分;坏物=反杀老板
             var fg = it.bad ? 25 : 30;
+            if (this.level >= 5) fg = Math.round(fg * 1.5);   // 卷王:逆袭暴击 ×1.5
             this.score += fg; this.feverGain += fg; this.scorePulse = 1;
             this.player.sy = 1.3; this.player.sx = 0.85;
             var fc = it.bad ? "#ffd24a" : "#46e08a";
-            this.burst(it.x, catchY - 10, fc, 22, 1.2);
+            this.burst(it.x, catchY - 10, fc, this.level >= 5 ? 30 : 22, this.level >= 5 ? 1.5 : 1.2);
             this.ring(it.x, catchY - 10, it.bad ? "rgba(255,210,74,0.9)" : "rgba(70,224,138,0.9)");
             this.addPop(it.x, catchY - 28, (it.bad ? "反杀 " + it.t : it.t) + " +" + fg, fc, it.bad);
             if (it.bad) audio.smash(); else audio.good(8);
@@ -458,10 +488,12 @@
             this.combo++;
             this.comboTimer = 2.6; this.comboPulse = 1;
             var gain = 10 + (this.combo >= 2 ? (this.combo - 1) * 5 : 0);
-            this.hp = Math.min(100, this.hp + (dying ? 12 : 6));   // 濒死回血翻倍
+            var heal = dying ? 12 : 6;
+            if (this.level >= 2) heal = Math.round(heal * 1.5);   // 小组长:回血翻倍
+            this.hp = Math.min(100, this.hp + heal);
             this.score += gain; this.scorePulse = 1;
-            // 攒逆袭值:连击越高越快,濒死时更快
-            this.rage = Math.min(100, this.rage + (8 + this.combo * 1.5) * (dying ? 1.6 : 1));
+            var rmul = (dying ? 1.6 : 1) * (this.level >= 4 ? 1.3 : 1);  // 打工超人:攒怒更快
+            this.rage = Math.min(100, this.rage + (8 + this.combo * 1.5) * rmul);
             this.ragePulse = 1;
             this.player.sy = 1.35; this.player.sx = 0.8;
             this.burst(it.x, catchY - 10, "#46e08a", 18, 1);
@@ -471,6 +503,7 @@
             if (this.rage >= 100 && this.fever <= 0) this.startFever();
           }
           this.items.splice(i, 1);
+          this.checkLevelUp();
           continue;
         }
       }
@@ -573,19 +606,20 @@
     var p = this.player;
     var y = H - 70;
     var fev = this.fever > 0;
+    var form = FORMS[this.level];
     ctx.save();
     ctx.translate(p.x, y + p.h);
     ctx.scale(p.sx, p.sy);
     ctx.translate(-p.x, -(y + p.h));
-    ctx.shadowColor = fev ? "rgba(255,210,74,0.9)" : "rgba(125,162,255,0.6)";
+    ctx.shadowColor = fev ? "rgba(255,210,74,0.9)" : form.tray;
     ctx.shadowBlur = fev ? 22 : 14;
-    ctx.fillStyle = fev ? "#ffd24a" : "#7da2ff";
+    ctx.fillStyle = fev ? "#ffd24a" : form.tray;
     roundRect(ctx, p.x - p.w / 2, y, p.w, p.h, 8);
     ctx.fill();
     ctx.shadowBlur = 0;
     ctx.font = "30px serif";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(fev ? "😤" : "🧑‍💼", p.x, y - 22);
+    ctx.fillText(form.emoji, p.x, y - 22);
     ctx.restore();
   };
 
@@ -616,10 +650,6 @@
   };
 
   Game.prototype.drawFeverFX = function () {
-    if (this.feverFlash > 0) {
-      ctx.fillStyle = "rgba(255,200,60," + (this.feverFlash * 0.45).toFixed(3) + ")";
-      ctx.fillRect(0, 0, W, H);
-    }
     if (this.fever > 0) {
       var pulse = 0.5 + 0.5 * Math.sin(this.t * 12);
       var a = 0.12 + 0.12 * pulse;
@@ -627,6 +657,14 @@
       g.addColorStop(0, "rgba(255,200,60,0)");
       g.addColorStop(1, "rgba(255,180,30," + a.toFixed(3) + ")");
       ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+    if (this.feverFlash > 0) {
+      ctx.fillStyle = "rgba(255,200,60," + (this.feverFlash * 0.4).toFixed(3) + ")";
+      ctx.fillRect(0, 0, W, H);
+    }
+    if (this.levelFlash > 0) {
+      ctx.fillStyle = "rgba(255,255,255," + (this.levelFlash * 0.5).toFixed(3) + ")";
       ctx.fillRect(0, 0, W, H);
     }
   };
@@ -638,10 +676,11 @@
   };
 
   Game.prototype.drawHUD = function () {
-    var bw = Math.min(W - 40, 320), bh = 16, bx = 20, by = 20;
+    var bw = Math.min(W - 40, 320), bx = 20, by = 18;
     // 血条
+    var bh = 14;
     ctx.fillStyle = "rgba(255,255,255,0.08)";
-    roundRect(ctx, bx, by, bw, bh, 8); ctx.fill();
+    roundRect(ctx, bx, by, bw, bh, 7); ctx.fill();
     var ratio = this.hp / 100;
     var col = this.hp > 50 ? "#46e08a" : (this.hp > 25 ? "#ffc046" : "#ff5b6b");
     var hpScale = 1 + this.hpPulse * 0.12;
@@ -649,27 +688,27 @@
     ctx.translate(bx, by + bh / 2); ctx.scale(1, hpScale); ctx.translate(-bx, -(by + bh / 2));
     ctx.fillStyle = col;
     if (this.hp <= 25) { ctx.shadowColor = "#ff5b6b"; ctx.shadowBlur = 10 + 8 * Math.sin(this.t * 10); }
-    roundRect(ctx, bx, by, Math.max(2, bw * ratio), bh, 8); ctx.fill();
+    roundRect(ctx, bx, by, Math.max(2, bw * ratio), bh, 7); ctx.fill();
     ctx.shadowBlur = 0;
     ctx.restore();
-    ctx.fillStyle = "#cfd6e4";
-    ctx.font = "bold 12px sans-serif";
+    ctx.fillStyle = "#9aa6ba";
+    ctx.font = "10px sans-serif";
     ctx.textAlign = "left"; ctx.textBaseline = "middle";
-    ctx.fillText("职场存活值", bx + 2, by - 10);
+    ctx.fillText("职场存活值", bx + 2, by - 7);
 
-    // —— 逆袭值槽(血条下方)——
-    var ry = by + bh + 8, rh = 10;
+    // 逆袭值槽
+    var ry = by + bh + 7, rh = 9;
     ctx.fillStyle = "rgba(255,255,255,0.06)";
-    roundRect(ctx, bx, ry, bw, rh, 5); ctx.fill();
+    roundRect(ctx, bx, ry, bw, rh, 4); ctx.fill();
+    ctx.textBaseline = "middle"; ctx.textAlign = "left";
     if (this.fever > 0) {
-      // 逆袭进行中:显示剩余时间(金色递减 + 闪烁)
-      var fr = clamp(this.fever / FEVER_DUR, 0, 1);
+      var fr = clamp(this.fever / (FEVER_DUR + (this.level >= 4 ? 2 : 0)), 0, 1);
       ctx.fillStyle = "#ffd24a";
       ctx.shadowColor = "#ffd24a"; ctx.shadowBlur = 10 + 6 * Math.sin(this.t * 14);
-      roundRect(ctx, bx, ry, Math.max(2, bw * fr), rh, 5); ctx.fill();
+      roundRect(ctx, bx, ry, Math.max(2, bw * fr), rh, 4); ctx.fill();
       ctx.shadowBlur = 0;
-      ctx.fillStyle = "#ffd24a";
-      ctx.fillText("🔥 逆袭中 ×3 反杀!", bx + 2, ry + rh + 9);
+      ctx.fillStyle = "#ffd24a"; ctx.font = "bold 10px sans-serif";
+      ctx.fillText("🔥 逆袭中 ×3 反杀!", bx + 2, ry + rh + 8);
     } else {
       var rgScale = 1 + this.ragePulse * 0.1;
       ctx.save();
@@ -677,32 +716,42 @@
       var full = this.rage >= 100;
       ctx.fillStyle = full ? "#ffd24a" : "#ff9a3a";
       if (full) { ctx.shadowColor = "#ffd24a"; ctx.shadowBlur = 12; }
-      roundRect(ctx, bx, ry, Math.max(2, bw * (this.rage / 100), 0), rh, 5); ctx.fill();
+      roundRect(ctx, bx, ry, Math.max(2, bw * (this.rage / 100)), rh, 4); ctx.fill();
       ctx.shadowBlur = 0;
       ctx.restore();
-      ctx.fillStyle = "#caa86a";
-      ctx.fillText("逆袭值 " + (this.rage | 0) + "%", bx + 2, ry + rh + 9);
+      ctx.fillStyle = "#caa86a"; ctx.font = "10px sans-serif";
+      ctx.fillText("逆袭值 " + (this.rage | 0) + "%", bx + 2, ry + rh + 8);
     }
 
-    // 在职天数
+    // 形态进化进度条
+    var fy = ry + rh + 16, fh = 9;
+    var form = FORMS[this.level];
+    var maxed = this.level >= FORMS.length - 1;
+    ctx.fillStyle = "rgba(255,255,255,0.06)";
+    roundRect(ctx, bx, fy, bw, fh, 4); ctx.fill();
+    var fprog = maxed ? 1 : clamp((this.score - form.at) / (FORMS[this.level + 1].at - form.at), 0, 1);
+    ctx.fillStyle = form.tray;
+    roundRect(ctx, bx, fy, Math.max(2, bw * fprog), fh, 4); ctx.fill();
+    ctx.fillStyle = "#cfd6e4"; ctx.font = "bold 11px sans-serif"; ctx.textBaseline = "middle";
+    ctx.fillText(form.emoji + " " + form.name + (maxed ? " · MAX" : " → " + FORMS[this.level + 1].name), bx + 2, fy + fh + 9);
+
+    // 右上:在职天数 + 积分
     ctx.textAlign = "right";
     var dScale = 1 + this.scorePulse * 0.25;
     ctx.save();
     ctx.translate(W - 20, by + 8); ctx.scale(dScale, dScale);
-    ctx.font = "bold 18px sans-serif";
-    ctx.fillStyle = "#eef2f9";
+    ctx.font = "bold 18px sans-serif"; ctx.fillStyle = "#eef2f9";
     ctx.fillText("在职 " + this.days + " 天", 0, 0);
     ctx.restore();
-    ctx.textAlign = "right";
-    ctx.font = "bold 12px sans-serif";
-    ctx.fillStyle = "#7f8aa0";
+    ctx.textAlign = "right"; ctx.font = "bold 12px sans-serif"; ctx.fillStyle = "#7f8aa0";
     ctx.fillText("积分 " + this.score, W - 20, by + 30);
 
-    // 逆袭大字 / 连击
+    // 屏幕中上:逆袭/连击大字(避开左上 HUD)
+    var midY = H * 0.2;
     if (this.fever > 0) {
       var cs = 1 + Math.max(0, this.feverFlash) * 0.4;
       ctx.save();
-      ctx.translate(W / 2, by + 78); ctx.scale(cs, cs);
+      ctx.translate(W / 2, midY); ctx.scale(cs, cs);
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillStyle = "#ffd24a";
       ctx.shadowColor = "rgba(255,210,74,0.8)"; ctx.shadowBlur = 16;
@@ -713,7 +762,7 @@
     } else if (this.combo >= 2) {
       var ccs = 1 + this.comboPulse * 0.5;
       ctx.save();
-      ctx.translate(W / 2, by + 78); ctx.scale(ccs, ccs);
+      ctx.translate(W / 2, midY); ctx.scale(ccs, ccs);
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillStyle = "#ffc046";
       ctx.shadowColor = "rgba(255,192,70,0.7)"; ctx.shadowBlur = 12;
@@ -721,7 +770,7 @@
       ctx.fillText("🔥 x" + this.combo, 0, 0);
       ctx.shadowBlur = 0;
       ctx.restore();
-      var cw = 80, cx = W / 2 - cw / 2, cy = by + 96;
+      var cw = 80, cx = W / 2 - cw / 2, cy = midY + 18;
       ctx.fillStyle = "rgba(255,192,70,0.25)";
       roundRect(ctx, cx, cy, cw, 4, 2); ctx.fill();
       ctx.fillStyle = "#ffc046";
@@ -730,15 +779,15 @@
   };
 
   function drawCenterCard(lines) {
-    var cw = Math.min(W - 48, 360);
-    var ch = lines.reduce(function (s, l) { return s + l.gap; }, 60);
+    var cw = Math.min(W - 48, 380);
+    var ch = lines.reduce(function (s, l) { return s + l.gap; }, 56);
     var cx = W / 2, cy = H / 2;
-    ctx.fillStyle = "rgba(12,18,30,0.9)";
+    ctx.fillStyle = "rgba(12,18,30,0.92)";
     roundRect(ctx, cx - cw / 2, cy - ch / 2, cw, ch, 16); ctx.fill();
     ctx.strokeStyle = "rgba(125,162,255,0.45)"; ctx.lineWidth = 1.5;
     roundRect(ctx, cx - cw / 2, cy - ch / 2, cw, ch, 16); ctx.stroke();
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    var y = cy - ch / 2 + 34;
+    var y = cy - ch / 2 + 32;
     for (var i = 0; i < lines.length; i++) {
       var l = lines[i];
       ctx.fillStyle = l.color || "#eef2f9";
@@ -749,23 +798,26 @@
   }
 
   Game.prototype.drawReady = function () {
+    var chain = FORMS.map(function (f) { return f.emoji; }).join(" → ");
     drawCenterCard([
-      { text: "今天我被优化了", font: "bold 26px sans-serif", color: "#7da2ff", gap: 40 },
-      { text: "接 💰 续命,躲 📋 优化", font: "14px sans-serif", color: "#aeb8cc", gap: 28 },
-      { text: "攒满逆袭值 → 🔥 逆袭时刻", font: "bold 14px sans-serif", color: "#ffd24a", gap: 24 },
-      { text: "无敌 + 反杀老板 + 暴击 ×3", font: "12px sans-serif", color: "#caa86a", gap: 38 },
-      { text: "点击 / 按空格 开始打工", font: "bold 16px sans-serif", color: "#46e08a", gap: 24 }
+      { text: "今天我被优化了", font: "bold 26px sans-serif", color: "#7da2ff", gap: 38 },
+      { text: "接 💰 续命,躲 📋 优化,攒满 🔥 逆袭", font: "13px sans-serif", color: "#aeb8cc", gap: 28 },
+      { text: "积分一路进化,解锁 6 种形态", font: "bold 14px sans-serif", color: "#ffd24a", gap: 26 },
+      { text: chain, font: "20px serif", color: "#cfd6e4", gap: 26 },
+      { text: this.bestForm > 0 ? ("历史最高形态:" + FORMS[this.bestForm].name) : "能进化到卷王之王吗?", font: "12px sans-serif", color: "#7f8aa0", gap: 38 },
+      { text: "点击 / 按空格 开始打工", font: "bold 16px sans-serif", color: "#46e08a", gap: 22 }
     ]);
   };
 
   Game.prototype.drawOver = function () {
+    var form = FORMS[this.level];
     drawCenterCard([
-      { text: "💼 你被优化了", font: "bold 26px sans-serif", color: "#ff5b6b", gap: 42 },
-      { text: "在职 " + this.days + " 天", font: "bold 22px sans-serif", color: "#eef2f9", gap: 30 },
-      { text: "总积分 " + this.score, font: "14px sans-serif", color: "#ffd24a", gap: 30 },
-      { text: verdict(this.days), font: "13px sans-serif", color: "#aeb8cc", gap: 30 },
-      { text: "最高纪录:在职 " + this.best + " 天", font: "13px sans-serif", color: "#7f8aa0", gap: 38 },
-      { text: "点击 / 空格 再就业", font: "bold 16px sans-serif", color: "#46e08a", gap: 24 }
+      { text: "💼 你被优化了", font: "bold 26px sans-serif", color: "#ff5b6b", gap: 40 },
+      { text: "在职 " + this.days + " 天 · 积分 " + this.score, font: "bold 18px sans-serif", color: "#eef2f9", gap: 30 },
+      { text: "最终形态 " + form.emoji + " " + form.name, font: "bold 16px sans-serif", color: form.tray, gap: 30 },
+      { text: verdict(this.days), font: "13px sans-serif", color: "#aeb8cc", gap: 28 },
+      { text: "纪录:在职 " + this.best + " 天 · 最高 " + FORMS[this.bestForm].name, font: "12px sans-serif", color: "#7f8aa0", gap: 38 },
+      { text: "点击 / 空格 再就业", font: "bold 16px sans-serif", color: "#46e08a", gap: 22 }
     ]);
   };
 
