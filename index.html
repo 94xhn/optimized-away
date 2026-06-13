@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>今天我被优化了</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0f1420; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    touch-action: none; user-select: none;
+  }
+  #c { display: block; width: 100%; height: 100%; }
+  #hint {
+    position: fixed; left: 0; right: 0; bottom: 10px; text-align: center;
+    color: #5a6577; font-size: 12px; letter-spacing: .5px; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">← → 或拖动 / 点屏幕左右半边移动</div>
+<script>
+(function () {
+  "use strict";
+
+  // ---------- 视口尺寸(headless / iframe 下必须有 fallback,否则 0 坍缩)----------
+  function vw() { return window.innerWidth || document.documentElement.clientWidth || 400; }
+  function vh() { return window.innerHeight || document.documentElement.clientHeight || 640; }
+
+  var canvas = document.getElementById("c");
+  var ctx = canvas.getContext("2d");
+  var DPR = 1;
+  var W = vw(), H = vh();
+
+  function resize() {
+    W = vw(); H = vh();
+    DPR = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    canvas.style.width = W + "px";
+    canvas.style.height = H + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // ---------- 文案库(梗)----------
+  var GOOD = [
+    { e: "💰", t: "工资到账" },
+    { e: "☕", t: "续命咖啡" },
+    { e: "🎉", t: "项目上线" },
+    { e: "🛡️", t: "成功转正" },
+    { e: "🏆", t: "季度之星" },
+    { e: "🍗", t: "团建加餐" },
+    { e: "💡", t: "好点子" },
+    { e: "📈", t: "KPI 达标" }
+  ];
+  var BAD = [
+    { e: "📋", t: "N+1 大礼包" },
+    { e: "⏰", t: "强制加班" },
+    { e: "🔥", t: "背锅侠" },
+    { e: "💢", t: "领导 PUA" },
+    { e: "🎂", t: "35 岁危机" },
+    { e: "🪑", t: "工位被撤" },
+    { e: "📉", t: "绩效垫底" },
+    { e: "🌧️", t: "优化通知" }
+  ];
+
+  // 结算黑色幽默:按在职天数给不同评语
+  function verdict(days) {
+    if (days < 8)   return "试用期都没撑过,主打一个高效。";
+    if (days < 30)  return "毕业季,恭喜你成为应届被优化生。";
+    if (days < 90)  return "一个季度,刚好赶上第一波优化。";
+    if (days < 200) return "老员工预备役,N+X 警告已送达。";
+    if (days < 365) return "卷王本王,可惜公司要降本增笑。";
+    return "你居然撑过了一年?HR 表示这不科学。";
+  }
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function pick(arr) { return arr[(Math.random() * arr.length) | 0]; }
+
+  // ---------- 游戏 ----------
+  function Game() {
+    this.state = "ready";      // ready / playing / over
+    this.reset();
+    this.best = +(localStorage.getItem("optimized_best") || 0);
+  }
+
+  Game.prototype.reset = function () {
+    this.t = 0;                // 累计游戏时间(秒)
+    this.hp = 100;
+    this.score = 0;            // 接到的 good 计数 * 10
+    this.days = 0;             // 在职天数 = floor(存活秒数)
+    this.items = [];           // 掉落物
+    this.pops = [];            // 浮动反馈文字
+    this.spawnTimer = 0;
+    this.shake = 0;            // 受击抖动
+    // 玩家(底部托盘)
+    this.player = { x: W / 2, w: 92, h: 18, speed: 520 };
+    this.keyL = false; this.keyR = false;
+    this.pointerX = null;      // 指针绝对横坐标,null=未按
+  };
+
+  Game.prototype.start = function () {
+    this.reset();
+    this.state = "playing";
+  };
+
+  Game.prototype.gameOver = function () {
+    this.state = "over";
+    if (this.days > this.best) {
+      this.best = this.days;
+      try { localStorage.setItem("optimized_best", String(this.best)); } catch (e) {}
+    }
+  };
+
+  // 难度:随时间提升下落速度、生成频率、坏物比例
+  Game.prototype.difficulty = function () {
+    var d = this.t / 45;                 // 0 → 1 大约 45 秒
+    return {
+      fall: 150 + d * 230,               // 像素/秒
+      interval: Math.max(0.42, 0.95 - d * 0.5),
+      badRatio: Math.min(0.62, 0.42 + d * 0.22)
+    };
+  };
+
+  Game.prototype.spawn = function () {
+    var diff = this.difficulty();
+    var isBad = Math.random() < diff.badRatio;
+    var data = isBad ? pick(BAD) : pick(GOOD);
+    var r = 26;
+    this.items.push({
+      x: rand(r + 8, W - r - 8),
+      y: -r,
+      r: r,
+      vy: diff.fall * rand(0.85, 1.2),
+      bad: isBad,
+      e: data.e,
+      t: data.t
+    });
+  };
+
+  Game.prototype.addPop = function (x, y, text, color) {
+    this.pops.push({ x: x, y: y, text: text, color: color, life: 1 });
+  };
+
+  Game.prototype.update = function (dt) {
+    if (this.state !== "playing") return;
+
+    this.t += dt;
+    this.days = Math.floor(this.t);
+
+    // --- 玩家移动 ---
+    var p = this.player;
+    if (this.pointerX != null) {
+      // 跟随指针(带平滑)
+      var target = this.pointerX;
+      p.x += (target - p.x) * Math.min(1, dt * 14);
+    } else {
+      var dir = (this.keyR ? 1 : 0) - (this.keyL ? 1 : 0);
+      p.x += dir * p.speed * dt;
+    }
+    p.x = Math.max(p.w / 2, Math.min(W - p.w / 2, p.x));
+
+    // --- 掉落物 ---
+    this.spawnTimer -= dt;
+    if (this.spawnTimer <= 0) {
+      this.spawn();
+      this.spawnTimer = this.difficulty().interval;
+    }
+
+    var catchY = H - 70;        // 托盘高度线
+    for (var i = this.items.length - 1; i >= 0; i--) {
+      var it = this.items[i];
+      it.y += it.vy * dt;
+
+      // 接住判定:落到托盘高度且水平重叠
+      if (it.y + it.r >= catchY && it.y - it.r <= catchY + p.h) {
+        if (Math.abs(it.x - p.x) <= p.w / 2 + it.r * 0.6) {
+          if (it.bad) {
+            this.hp -= 20;
+            this.shake = 12;
+            this.addPop(it.x, catchY - 24, it.t + " -20", "#ff5b6b");
+            if (this.hp <= 0) { this.hp = 0; this.gameOver(); }
+          } else {
+            this.hp = Math.min(100, this.hp + 6);
+            this.score += 10;
+            this.addPop(it.x, catchY - 24, it.t + " +10", "#46e08a");
+          }
+          this.items.splice(i, 1);
+          continue;
+        }
+      }
+      // 掉出屏幕
+      if (it.y - it.r > H) this.items.splice(i, 1);
+    }
+
+    // --- 浮动文字 ---
+    for (var j = this.pops.length - 1; j >= 0; j--) {
+      var pop = this.pops[j];
+      pop.y -= 38 * dt;
+      pop.life -= dt * 1.4;
+      if (pop.life <= 0) this.pops.splice(j, 1);
+    }
+
+    if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 40);
+  };
+
+  // ---------- 绘制 ----------
+  Game.prototype.drawBg = function () {
+    // 渐变天花板 → 地板
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#141b2c");
+    g.addColorStop(1, "#0c111c");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // 格子间网格(隔板)
+    ctx.strokeStyle = "rgba(120,140,180,0.06)";
+    ctx.lineWidth = 1;
+    var step = 56;
+    for (var x = 0; x <= W; x += step) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+    for (var y = 0; y <= H; y += step) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+    // 地板
+    ctx.fillStyle = "rgba(90,110,150,0.10)";
+    ctx.fillRect(0, H - 46, W, 46);
+  };
+
+  Game.prototype.drawPlayer = function () {
+    var p = this.player;
+    var y = H - 70;
+    // 托盘(双手接物的桌面)
+    ctx.fillStyle = "#7da2ff";
+    roundRect(ctx, p.x - p.w / 2, y, p.w, p.h, 8);
+    ctx.fill();
+    // 打工人脑袋
+    ctx.font = "30px serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("🧑‍💼", p.x, y - 22);
+  };
+
+  Game.prototype.drawItems = function () {
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (var i = 0; i < this.items.length; i++) {
+      var it = this.items[i];
+      // 圆底盘
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
+      ctx.fillStyle = it.bad ? "rgba(255,91,107,0.16)" : "rgba(70,224,138,0.16)";
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = it.bad ? "rgba(255,91,107,0.6)" : "rgba(70,224,138,0.6)";
+      ctx.stroke();
+      // emoji
+      ctx.font = (it.r * 1.3 | 0) + "px serif";
+      ctx.fillText(it.e, it.x, it.y + 1);
+    }
+  };
+
+  Game.prototype.drawPops = function () {
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (var i = 0; i < this.pops.length; i++) {
+      var p = this.pops[i];
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.life));
+      ctx.fillStyle = p.color;
+      ctx.font = "bold 15px sans-serif";
+      ctx.fillText(p.text, p.x, p.y);
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  Game.prototype.drawHUD = function () {
+    // 血条(职场存活值)
+    var bw = Math.min(W - 40, 320), bh = 16, bx = 20, by = 20;
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    roundRect(ctx, bx, by, bw, bh, 8); ctx.fill();
+    var ratio = this.hp / 100;
+    var col = this.hp > 50 ? "#46e08a" : (this.hp > 25 ? "#ffc046" : "#ff5b6b");
+    ctx.fillStyle = col;
+    roundRect(ctx, bx, by, Math.max(2, bw * ratio), bh, 8); ctx.fill();
+    ctx.fillStyle = "#cfd6e4";
+    ctx.font = "bold 12px sans-serif";
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText("职场存活值", bx + 2, by - 10);
+
+    // 在职天数
+    ctx.textAlign = "right";
+    ctx.font = "bold 18px sans-serif";
+    ctx.fillStyle = "#eef2f9";
+    ctx.fillText("在职 " + this.days + " 天", W - 20, by + 8);
+  };
+
+  function drawCenterCard(lines) {
+    var cw = Math.min(W - 48, 360);
+    var ch = lines.reduce(function (s, l) { return s + l.gap; }, 60);
+    var cx = W / 2, cy = H / 2;
+    ctx.fillStyle = "rgba(16,22,36,0.86)";
+    roundRect(ctx, cx - cw / 2, cy - ch / 2, cw, ch, 16); ctx.fill();
+    ctx.strokeStyle = "rgba(125,162,255,0.4)"; ctx.lineWidth = 1.5;
+    roundRect(ctx, cx - cw / 2, cy - ch / 2, cw, ch, 16); ctx.stroke();
+
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    var y = cy - ch / 2 + 34;
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      ctx.fillStyle = l.color || "#eef2f9";
+      ctx.font = l.font || "16px sans-serif";
+      ctx.fillText(l.text, cx, y);
+      y += l.gap;
+    }
+  }
+
+  Game.prototype.drawReady = function () {
+    drawCenterCard([
+      { text: "今天我被优化了", font: "bold 26px sans-serif", color: "#7da2ff", gap: 42 },
+      { text: "接住 💰 续命,躲开 📋 优化", font: "14px sans-serif", color: "#aeb8cc", gap: 30 },
+      { text: "活得越久,在职天数越高", font: "13px sans-serif", color: "#7f8aa0", gap: 40 },
+      { text: "点击 / 按空格 开始打工", font: "bold 16px sans-serif", color: "#46e08a", gap: 24 }
+    ]);
+  };
+
+  Game.prototype.drawOver = function () {
+    drawCenterCard([
+      { text: "💼 你被优化了", font: "bold 26px sans-serif", color: "#ff5b6b", gap: 44 },
+      { text: "在职 " + this.days + " 天", font: "bold 22px sans-serif", color: "#eef2f9", gap: 34 },
+      { text: verdict(this.days), font: "13px sans-serif", color: "#aeb8cc", gap: 32 },
+      { text: "最高纪录:在职 " + this.best + " 天", font: "13px sans-serif", color: "#7f8aa0", gap: 40 },
+      { text: "点击 / 空格 再就业", font: "bold 16px sans-serif", color: "#46e08a", gap: 24 }
+    ]);
+  };
+
+  Game.prototype.render = function () {
+    ctx.save();
+    if (this.shake > 0) {
+      ctx.translate((Math.random() - 0.5) * this.shake, (Math.random() - 0.5) * this.shake);
+    }
+    this.drawBg();
+    this.drawItems();
+    this.drawPlayer();
+    this.drawPops();
+    ctx.restore();
+
+    this.drawHUD();
+    if (this.state === "ready") this.drawReady();
+    else if (this.state === "over") this.drawOver();
+  };
+
+  // 圆角矩形辅助
+  function roundRect(c, x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+
+  // ---------- 输入 ----------
+  var game = new Game();
+  window.game = game; // 供自动化核验读取状态
+
+  function tap() {
+    if (game.state === "ready" || game.state === "over") game.start();
+  }
+
+  window.addEventListener("keydown", function (e) {
+    if (e.code === "ArrowLeft" || e.code === "KeyA") game.keyL = true;
+    if (e.code === "ArrowRight" || e.code === "KeyD") game.keyR = true;
+    if (e.code === "Space" || e.code === "Enter") { e.preventDefault(); tap(); }
+  });
+  window.addEventListener("keyup", function (e) {
+    if (e.code === "ArrowLeft" || e.code === "KeyA") game.keyL = false;
+    if (e.code === "ArrowRight" || e.code === "KeyD") game.keyR = false;
+  });
+
+  function pointerPos(e) {
+    var rect = canvas.getBoundingClientRect();
+    var cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    return cx;
+  }
+  function onDown(e) {
+    e.preventDefault();
+    if (game.state !== "playing") { tap(); return; }
+    game.pointerX = pointerPos(e);
+  }
+  function onMove(e) {
+    if (game.pointerX == null) return;
+    e.preventDefault();
+    game.pointerX = pointerPos(e);
+  }
+  function onUp() { game.pointerX = null; }
+
+  canvas.addEventListener("mousedown", onDown);
+  canvas.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+  canvas.addEventListener("touchstart", onDown, { passive: false });
+  canvas.addEventListener("touchmove", onMove, { passive: false });
+  window.addEventListener("touchend", onUp);
+
+  // ---------- 主循环 ----------
+  var last = 0;
+  function loop(ts) {
+    if (!last) last = ts;
+    var dt = Math.min(0.05, (ts - last) / 1000); // 钳制,防卡顿后大跳
+    last = ts;
+    game.update(dt);
+    game.render();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
